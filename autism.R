@@ -2,6 +2,7 @@ library(VariantAnnotation)
 library(vcfR)
 library(ggpubr)
 library(ggplot2)
+library(MASS)
 
 #definitions of color format
 whitecolor='pink1'
@@ -9,7 +10,7 @@ blackcolor='black'
 hispaniccolor='tan3'
 apicolor='yellow1'
 
-#autism rate by group: white,black,hispanic,api
+#autism rate by group: white,black,hispanic,api (asian-pacific islander). It should be noted that all samples are east asian, none pacific islander.
 y<-c(12,10.2,7.9, 9.7) #retrieved from https://www.cdc.gov/mmwr/preview/mmwrhtml/ss6103a1.htm#Tab2
 
 
@@ -36,7 +37,7 @@ avpr1afile<-read.vcfR('avpr1a.popvcf') # AVP intricately involved with social be
 slc24a5file<-read.vcfR('slc24a5.popvcf') #solute transporter (na,k,ca). At cellular level oxy/avp mediate solute metabolism
 syvn1file<-read.vcfR('syvn1.popvcf')     #ER misfolded protein gene. Protein blockage/vesicle inteference associated with dementia
 
-# Other genes of interest - cacna1c and vda (cellular calcium), htr3a and slc6a4 (serotonin), CAMK2A, SNAP25 (intracellular calcium)
+# Other genes of interest - cacna1c and vdr (cellular calcium), htr3a and slc6a4 (serotonin), CAMK2A, SNAP25 (intracellular calcium)
 #                          caps2, INSR (BDNF release)
 # Note: plots do not necessarily represent n-terminus to c-terminus along x-axis. oxtr and avpr1a transcripts are read from
 # right to left by position on chromosome.
@@ -366,9 +367,19 @@ combined<-data.frame(white=unlist(c(oxtr$white,avpr1a$white,slc24a5$white,syvn1$
                      hispanic=unlist(c(oxtr$hispanic,avpr1a$hispanic,slc24a5$hispanic,syvn1$hispanic)), #row 3
                      api=unlist(c(oxtr$api,avpr1a$api,slc24a5$api,syvn1$api))) #row 4
 
+combined<-data.frame(row=c("white","black","hispanic","api"))
+combined<-NULL
+combined<-rbind(combined,white=unlist(c(oxtr$white,avpr1a$white,slc24a5$white,syvn1$white)))
+combined<-rbind(combined,black=unlist(c(oxtr$black,avpr1a$black,slc24a5$black,syvn1$black)))
+combined<-rbind(combined,hispanic=unlist(c(oxtr$hispanic,avpr1a$hispanic,slc24a5$hispanic,syvn1$hispanic)))
+combined<-rbind(combined,api=unlist(c(oxtr$api,avpr1a$api,slc24a5$api,syvn1$api)))
+
+combined<-combined[,1:4]
 #stuff that doesn't work
 ans<-lm(y~combined)
-combined<-t(combined) 
+
+
+#combined<-t(combined) 
 ans<-lda(combined[1,]+combined[2,]+combined[3,]+combined[4,],grouping=rows)
 
                     
