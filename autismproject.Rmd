@@ -1,0 +1,1125 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+div.a {
+    text-indent: 5%;}
+
+div.b {
+    text-indent: 5%;
+}
+
+div.c {
+   
+}
+</style>
+</head>
+<body>
+
+
+---
+title: "Udacity EDA Project: Autism Genes"
+author: "Robert Stafford"
+date: "April 22, 2018"
+output: html_document
+---
+## Objective: My project is about autism and genes. I am interested in these topics and wish to explore the potential link between autism rate and some SNPs from a phenotype-blind dataset (1000 Genomes Project).
+
+#####Disclaimer: I chose this topic because I wanted to learn how to download and use genetic data and because I am interested in autism and these particular genes. I use principal component analysis to break down the data, not because these genes in question should be construed as 100% causally related to autism or could be used as proxies for what is, just as an exercise as if they were.
+
+### Data for autism rate obtained from https://www.cdc.gov/mmwr/preview/mmwrhtml/ss6103a1.htm#Tab
+##### Their levels are c("white","black","hispanic","api") I will try to keep this order consistent
+### Data for genes (OXTR, AVPR1A, SLC24A5, SYVN1, TLR1) obtained from 1000 Genomes Project - https://www.ncbi.nlm.nih.gov/variation/tools/1000genomes/
+
+## Setting the Stage for Iterations:
+#### What are rough chacteristics of raw data?
+##### 1. Autism Rate: group membership and single number
+##### 2. Genetic Variation of gene: group membership and array of numbers (each corresponds to SNP on that gene)
+
+###### My commentary: Contextualizing the data is complicated and subjective. Basic assumptions about what an environment selects for is crucial. For example, autism decreases reproductive fitness in general and is out-selected. Does increased distance from ancestral allele indicate a negative correlation to autism? This is a good starting assumption in my opinion because autistic boys generally don't produce large families and seem particularly ill-equiped to deal with raw nature. A skeptic to this assumption might ask: Do all groups' variation have a negative correlation to autism? Have the same selection pressures existed for both male and female? I would think autistic women would have a more difficult time evading pregnancy than other women (in prehistory), and autistic males would be significantly less likely to cause pregnancy than other males. These are important questions when affixing +/- prefix to the autism rates when doing pca. For simplicity I defaulted all to a positive correlation, but the issue remains. The data I used is relational to ancestral, which has an unknown autism rate. Centering autism rate around a baseline would be ideal and would potentially introduce +/- distinctions naturally.
+<div class='a'>
+##### 1. Autism Rate, Figure 1
+</div>
+```{r setup, echo = FALSE, message=FALSE, results='hide'}
+knitr::opts_chunk$set(echo = FALSE)
+suppressWarnings(library(ggplot2))
+library(VariantAnnotation)
+library(vcfR)
+library(MASS)
+library(ggpubr)
+suppressWarnings(library(stats))
+library(dplyr)
+library(Biostrings)
+library(network)
+library(GGally)
+##############################################################################
+# 1. Autism Rate, group membership and single number
+
+#definitions of color format
+whitecolor='pink1'
+blackcolor='black'
+hispaniccolor='tan3'
+apicolor='yellow1'
+
+#Creating Autism Rate variables and Dataframe
+groups<-factor(c("white","black","hispanic","api"))
+
+y<-c(12,10.2, 7.9,9.7)
+groupautism<-data.frame(groups,y)
+colnames(groupautism)<-c("group","autism_rate")
+groupautism$group <- factor(groupautism$group,levels(groupautism$group)[c(4,2,3,1)]) #relevel them per cdc website
+
+#Plotting Dataframe
+figure_1<-ggplot(data=groupautism, aes(x=group, y=autism_rate))+geom_col(data=groupautism, aes(fill=group)) +
+  labs(title="Figure 1",y="autism per 1000")+
+  scale_fill_manual("", breaks = c("white", "black","hispanic","api"),values=c("white"=whitecolor, "black"=blackcolor,"hispanic"=hispaniccolor,"api"=apicolor),guide=FALSE)
+figure_1
+
+
+##############################################################################
+# 2. Genetic Variation of gene, group membership and array of numbers (each corresponds to SNP on that gene)
+#
+# Task A: read data in from files
+# Task B: Extract relevant data into dataframes
+# Task C: Make plots
+
+
+# Task A: read data in from files
+
+setwd('~/data/udacity/projects/1')
+oxtrfile<-read.vcfR('oxtr.popvcf') # oxytocin is a pro social hormone at behavioral level
+avpr1afile<-read.vcfR('avpr1a.popvcf') # AVP intricately involved with social behavior, involved in osmotic pressure avoidance
+                                       # in c elegans, as per Temple Grandin, autistics may prefer a hug machine (relates to sensory pressure)
+slc24a5file<-read.vcfR('slc24a5.popvcf') #solute transporter (na,k,ca). At cellular level oxy/avp mediate solute concentration
+syvn1file<-read.vcfR('syvn1.popvcf')     #ER misfolded protein gene. Protein blockage/vesicle inteference associated with dementia (and autism)
+tlr4file<-read.vcfR('tlr4.popvcf') #tlr4 involved in innate immunity response/chronic inflammation
+# End Task A
+
+# Task B: Extract relevant data into dataframes, one dataframe per gene: oxtr, etc.
+# Relevant data is grouped by autism rate groups (using 3 subgroups to average), including alternate allele frequency, ancestral allele, alternate allele, 
+
+my_read<-function (largev){
+  
+  #extract population alternate allele counts
+  ret_df<-data.frame(rows=seq(1,length(largev@gt[,'GBR'])))
+ 
+  ret_df$GBR<-gsub(',','.',largev@gt[,'GBR'])
+  ret_df$FIN<-gsub(',','.',largev@gt[,'FIN'])
+  ret_df$CEU<-gsub(',','.',largev@gt[,'CEU'])
+
+  ret_df$YRI<-gsub(',','.',largev@gt[,'YRI'])
+  ret_df$MSL<-gsub(',','.',largev@gt[,'MSL'])
+  ret_df$GWD<-gsub(',','.',largev@gt[,'GWD'])
+
+  ret_df$CLM<-gsub(',','.',largev@gt[,'CLM'])
+  ret_df$PUR<-gsub(',','.',largev@gt[,'PUR'])
+  ret_df$PEL<-gsub(',','.',largev@gt[,'PEL'])
+
+  ret_df$CHB<-gsub(',','.',largev@gt[,'CHB'])
+  ret_df$CHS<-gsub(',','.',largev@gt[,'CHS'])
+  ret_df$JPT<-gsub(',','.',largev@gt[,'JPT'])
+
+  #Average those counts by groups
+  # Creating numerator for division. numerator = count of alternate alleles per pop at SNP, aggregating by groups
+  #(format of vcf variable is character containing subdata, delimited by semicolon. I want the 2nd field-> "1:2:3:4")
+  #(splitting data on semicolon, and retrieving the second element returned by strsplit)
+
+  #Explanation of code: numerator extracts character from string, converts to number, (while preserving its array shape), adds to other subpopulations, this is total alternates per SNP. Denominator extracts character from string from first element (they are all the same), and just repeats it to length of array, and adds to other populations. This denominator is just total samples per SNP.
+  numer<-as.numeric(unlist(strsplit(ret_df$GBR,':'))[seq(2,4*length(ret_df$GBR),4)])+
+            as.numeric(unlist(strsplit(ret_df$FIN,':'))[seq(2,4*length(ret_df$FIN),4)])+
+            as.numeric(unlist(strsplit(ret_df$CEU,':'))[seq(2,4*length(ret_df$CEU),4)])
+  # denom is # samples for gene (2n =sum of samples of 3 subgroups, times each chromosome:2), replicated to be vector of equal length as numer
+  denom<-(rep((as.numeric(unlist(strsplit(ret_df$GBR,':'))[1])+as.numeric(unlist(strsplit(ret_df$FIN,':'))[1])+
+               as.numeric(unlist(strsplit(ret_df$CEU,':'))[1])),length(ret_df$GBR)))
+
+  ret_df$white<-numer/denom # altnerates/variation per sample size
+  ##################################################################################
+
+
+  #rinse, repeat per group
+  numer<-as.numeric(unlist(strsplit(ret_df$YRI,':'))[seq(2,4*length(ret_df$YRI),4)])+
+    as.numeric(unlist(strsplit(ret_df$MSL,':'))[seq(2,4*length(ret_df$MSL),4)])+
+    as.numeric(unlist(strsplit(ret_df$GWD,':'))[seq(2,4*length(ret_df$GWD),4)])
+  denom<-(rep((as.numeric(unlist(strsplit(ret_df$YRI,':'))[1])+as.numeric(unlist(strsplit(ret_df$MSL,':'))[1])+
+                 as.numeric(unlist(strsplit(ret_df$GWD,':'))[1])),length(ret_df$YRI)))
+
+  ret_df$black<-numer/denom
+  ##################################################################################
+
+  #rinse, repeat
+  numer<-as.numeric(unlist(strsplit(ret_df$CLM,':'))[seq(2,4*length(ret_df$CLM),4)])+
+    as.numeric(unlist(strsplit(ret_df$PUR,':'))[seq(2,4*length(ret_df$PUR),4)])+
+    as.numeric(unlist(strsplit(ret_df$PEL,':'))[seq(2,4*length(ret_df$PEL),4)])
+  denom<-(rep((as.numeric(unlist(strsplit(ret_df$CLM,':'))[1])+as.numeric(unlist(strsplit(ret_df$PUR,':'))[1])+
+                 as.numeric(unlist(strsplit(ret_df$PEL,':'))[1])),length(ret_df$CLM)))
+
+  ret_df$hispanic<-numer/denom
+  ##################################################################################
+
+  #rinse, repeat
+  numer<-as.numeric(unlist(strsplit(ret_df$CHB,':'))[seq(2,4*length(ret_df$CHB),4)])+
+    as.numeric(unlist(strsplit(ret_df$CHS,':'))[seq(2,4*length(ret_df$CHS),4)])+
+    as.numeric(unlist(strsplit(ret_df$JPT,':'))[seq(2,4*length(ret_df$JPT),4)])
+  denom<-(rep((as.numeric(unlist(strsplit(ret_df$CHB,':'))[1])+as.numeric(unlist(strsplit(ret_df$CHS,':'))[1])+
+                 as.numeric(unlist(strsplit(ret_df$JPT,':'))[1])),length(ret_df$CHB)))
+
+  ret_df$api<-numer/denom
+  ##################################################################################
+
+
+  
+ 
+  
+  ret_df$ref<-largev@fix[,"REF"] #This is the literal ancestral nucleotide, per SNP
+  ret_df$alt<-largev@fix[,"ALT"] #This is the literal alternate nucleotide, per SNP
+
+  return (ret_df)
+} #End function definition to read parts of formal class vcfr into dataframe
+
+
+# Use of function to read vcf
+oxtr<-my_read(oxtrfile)
+avpr1a<-my_read(avpr1afile)
+slc24a5<-my_read(slc24a5file)
+syvn1<-my_read(syvn1file)
+tlr4<-my_read(tlr4file)
+#end task B
+
+# Task C: Use plots that best show overall trends (context), and best show outliers (content). I added a light blue background because I felt it best supported reading of group color scheme
+
+figure_2<-ggplot(data=oxtr, aes(x=seq(1,length(white))))+
+  stat_smooth(method='loess',geom='line',aes(y=white,color="white"))+
+  stat_smooth(method='loess',geom='line',aes(y=black,color="black"))+
+  stat_smooth(method='loess',geom='line',aes(y=hispanic,color="hispanic"))+
+  stat_smooth(method='loess',geom='line',aes(y=api,color="api"))+
+    scale_colour_manual("",breaks = c("white", "black","hispanic","api"),values = c("white"=whitecolor, "black"=blackcolor,"hispanic"=hispaniccolor,"api"=apicolor)) +
+    labs(y='alternate allele frequency', x='position on chromosome',title='Figure 2. OXTR gene (oxytocin receptor)')
+
+figure_3<-ggplot(data=avpr1a, aes(x=seq(1,length(white))))+
+  stat_smooth(method='loess',geom='line',aes(y=white),color=whitecolor)+
+  stat_smooth(method='loess',geom='line',aes(y=black),color=blackcolor)+
+  stat_smooth(method='loess',geom='line',aes(y=hispanic),color=hispaniccolor)+
+  stat_smooth(method='loess',geom='line',aes(y=api),color=apicolor)+
+      scale_colour_manual("",breaks = c("white", "black","hispanic","api"),values = c("white"=whitecolor, "black"=blackcolor,"hispanic"=hispaniccolor,"api"=apicolor)) +
+      labs(y='alternate allele frequency', x='position on chromosome',title='Figure 3. avpr1a gene (vasopressin receptor')
+
+figure_4<-ggplot(data=slc24a5, aes(x=seq(1,length(white))))+
+  stat_smooth(method='loess',geom='line',aes(y=white),color=whitecolor)+
+  stat_smooth(method='loess',geom='line',aes(y=black),color=blackcolor)+
+  stat_smooth(method='loess',geom='line',aes(y=hispanic),color=hispaniccolor)+
+  stat_smooth(method='loess',geom='line',aes(y=api),color=apicolor)+
+      scale_colour_manual("", breaks = c("white", "black","hispanic","api"),values = c("white"=whitecolor, "black"=blackcolor,"hispanic"=hispaniccolor,"api"=apicolor)) +
+      labs(y='alternate allele frequency', x='position on chromosome',title='Figure 4. slc24a5 gene (solute transporter)')
+
+figure_5<-ggplot(data=syvn1, aes(x=seq(1,length(white))))+
+  stat_smooth(method='loess',geom='line',aes(y=white),color=whitecolor)+
+  stat_smooth(method='loess',geom='line',aes(y=black),color=blackcolor)+
+  stat_smooth(method='loess',geom='line',aes(y=hispanic),color=hispaniccolor)+
+  stat_smooth(method='loess',geom='line',aes(y=api),color=apicolor)+
+      scale_colour_manual("",breaks = c("white", "black","hispanic","api"),values = c("white"=whitecolor, "black"=blackcolor,"hispanic"=hispaniccolor,"api"=apicolor)) +
+      labs(y='alternate allele frequency', x='position on chromosome',title='Figure 5. syvn1 gene (ER purifier)')
+
+#add background to improve visibility
+figure_2<-figure_2+  theme(panel.background =element_rect(fill='lightskyblue',color='lightskyblue'),panel.grid.major=element_line(color='lightskyblue'),panel.grid.minor=element_line(color='lightskyblue'),legend.key=  element_rect(color='lightskyblue',fill='lightskyblue'), legend.background = element_rect(fill='lightskyblue') )
+ 
+figure_3<-figure_3+  theme(panel.background =element_rect(fill='lightskyblue',color='lightskyblue'),panel.grid.major=element_line(color='lightskyblue'),panel.grid.minor=element_line(color='lightskyblue'))
+  
+figure_4<-figure_4+  theme(panel.background =element_rect(fill='lightskyblue',color='lightskyblue'),panel.grid.major=element_line(color='lightskyblue'),panel.grid.minor=element_line(color='lightskyblue'))
+  
+figure_5<-figure_5+  theme(panel.background =element_rect(fill='lightskyblue',color='lightskyblue'),panel.grid.major=element_line(color='lightskyblue'),panel.grid.minor=element_line(color='lightskyblue'))
+
+```
+
+<div class='b'>
+##### 2. Genetic Variation of Gene
+####### Figure 2: OXTR
+####### Figure 3: AVPR1A
+####### Figure 4: SLC24A5
+####### Figure 5: SYVN1
+####### Figure 6: TLR4
+####### Figure 2b: OXTR with rs53576 focus
+</div>
+```{r draw_setup, echo=FALSE}
+
+ggarrange(figure_2,figure_3,figure_4,figure_5,ncol=2,nrow=2) #changed arrangement to put avp under oxy, since I think they compare better
+
+# Revised Plot for Fun (added vertical line at area of interest)
+#common autism SNP:rs53576, homozygous A (adenine) is worst, homozygous G (guanine) is best
+# reference (default nucleotide) for this loci is A (autism-associated nucleobase) per console command: oxtrfile@fix[,4][which(oxtrfile@fix[,3]=='rs53576')[1]]
+# reference is located within vcfr file in @fix[,4] and SNP is @fix[,3]
+#increased variance at this loci is negatively correlated to autism
+figure_2b<-figure_2 + geom_vline(show.legend=TRUE,xintercept=which(oxtrfile@fix[,3]=='rs53576')[1],color="darkolivegreen",linetype=2)+labs(title='Figure 2b. OXTR with rs53576 SNP focus')
+#figure_5
+
+#Additional Gene for fun
+figure_5<-ggplot(data=tlr4, aes(x=seq(1,length(white))))+
+  stat_smooth(method='loess',geom='line',aes(y=white),color=whitecolor)+
+  stat_smooth(method='loess',geom='line',aes(y=black),color=blackcolor)+
+  stat_smooth(method='loess',geom='line',aes(y=hispanic),color=hispaniccolor)+
+  stat_smooth(method='loess',geom='line',aes(y=api),color=apicolor)+
+      scale_colour_manual("",breaks = c("white", "black","hispanic","api"),values = c("white"=whitecolor, "black"=blackcolor,"hispanic"=hispaniccolor,"api"=apicolor)) +
+      labs(y='alternate allele frequency', x='position on chromosome',title='Figure 6. tlr4 gene (inflammation)')+
+      theme(panel.background = element_rect(fill='lightskyblue',color='lightskyblue'),panel.grid.major=element_line(color='lightskyblue'),panel.grid.minor=element_line(color='lightskyblue'))
+
+figure_5 #changed order of last 2 to orient last next to subsequent web address
+figure_2b
+```
+
+####(dashed line is rs53576: https://www.snpedia.com/index.php/Rs53576)
+
+
+## Initial overview of raw data.
+Figure 1: Rates are atypical because many trends, such as economics, are ordered black, hispanic, white, api. The autism rate has the middle economic groups at the autism extremes.
+Figures 2-6: Most of the gene plots curves have similar arcing. The most interesting trend I noticed was inverted curves (of loess function) along OXTR for black and api.
+
+For most of the rest of this project I will be focusing on the OXTR gene.
+
+#Iteration 1
+####Basic intergroup variation comparisons
+###### 1. raw variation, figure 7
+###### 2. between group differences, figures 8-11
+###### 3. autism rate / raw variation, figure 12
+
+```{r raw_group_differences, echo=FALSE}
+
+#Plots:
+groupautism$total_variation<-c(sum(oxtr$white),sum(oxtr$black),sum(oxtr$hispanic),sum(oxtr$api))
+figure_7<-ggplot(data=groupautism, aes(x=group, y=total_variation))+geom_col(data=groupautism, aes(fill=group)) +
+  labs(title="Figure 7. Aggregate variation in 747 SNP of OXTR",y="sum of all alternate allele probabilities")+
+  scale_fill_manual("", breaks = c("white", "black","hispanic","api"),values=c(whitecolor, blackcolor,hispaniccolor,apicolor),guide=FALSE)
+
+figure_7
+
+#6 matches -> 6 plots facet wrapped, this line aggrates data to facet wrap
+oxtrdifferences<-data.frame(c(abs(oxtr$white-oxtr$black),abs(oxtr$white-oxtr$hispanic),abs(oxtr$white-oxtr$api),abs(oxtr$black-oxtr$hispanic),abs(oxtr$black-oxtr$api),abs(oxtr$hispanic-oxtr$api)))
+
+colnames(oxtrdifferences)<-"matches"
+
+# ###Testing
+# #squareroot to proof for imaginary numbers
+# oxtrdifferences$matches<-oxtrdifferences$matches**0.5
+# #set nan to zero if it happened (shouldn't because used abs above)
+# oxtrdifferences$matches[is.nan(oxtrdifferences$matches)]<-0
+
+#binning
+oxtrdifferences$group<-factor(c(rep("white-black",length(oxtr$white)),rep("white-hispanic",length(oxtr$white)),rep("white-api",length(oxtr$white)),rep("black-hispanic",length(oxtr$white)),rep("black-api",length(oxtr$white)),rep("hispanic-api",length(oxtr$white))))
+
+#levels
+levels(oxtrdifferences$group)<-c("white-black","white-hispanic","white-api","black-hispanic","black-api","hispanic-api")
+  
+
+oxtrdifferences$ind<-c(rep(seq(1,length(oxtr$white)),6)) #creating indexing that mirrors original df creation to facet wrap
+
+figure_8<-ggplot(data=oxtrdifferences, aes(x=ind))+
+                      geom_area(data=oxtrdifferences, aes(y=matches))+
+                      facet_wrap(~group)+
+                      labs(x="position on chromosome",y="difference in alternate allele probability",title="Figure 8. Cross Group Differences in OXTR geom_area()")
+  
+  
+figure_8
+
+
+figure_9<-ggplot(data=group_by(oxtrdifferences,group), aes(x=group,y=abs(matches)))+
+   geom_boxplot(outlier.colour="red")+#, outlier.shape=1, outlier.size=1) +
+   stat_summary(fun.y=mean, geom="point", shape=23, size=4)+  
+   labs(title="Figure 9. Cross Group Differences in OXTR geom_boxplot()",y="difference in alternate allele probability")#data as is, next 2 modify it as reexamination
+   
+
+figure_9
+
+########################
+
+figure_10<-ggplot(data=group_by(oxtrdifferences,group), aes(x=group,y=abs(matches**0.5)))+
+   geom_bar(stat='summary',fun.y='sum')+ 
+   labs(title="Figure 10. Cross Group Differences in OXTR geom_bar(), differences squareroot",y="difference in alternate allele probability")# minimizes large differences
+   
+
+figure_10
+
+figure_11<-ggplot(data=group_by(oxtrdifferences,group), aes(x=group,y=abs(matches**2)))+
+   geom_bar(stat='summary',fun.y='sum')+  
+   labs(title="Figure 11. Cross Group Differences in OXTR geom_bar(), differences squared",y="difference in alternate allele probability") # minimizes small differences
+   
+
+figure_11
+
+
+figure_12<-ggplot(data=groupautism, aes(x=group, y=autism_rate/total_variation))+geom_col(data=groupautism, aes(fill=group)) +
+  labs(title="Figure 12. Autism Rate per OXTR SNP variants",y="")+
+  scale_fill_manual("", breaks = c("white", "black","hispanic","api"),values=c(whitecolor, blackcolor,hispaniccolor,apicolor),guide=FALSE)
+
+figure_12
+
+```
+
+#Analysis Iteration 1
+
+Figures 8 and 9 use same data (cross-group differences per SNP: 6 cross-types), plotted differently. Figures 10 and 11 are modified "regressions" of the data used in 8/9.
+
+The first time I looked at this data I thought that the group most central was hispanic (hispanic-api had smallest intergroup difference in figure 8 so it must be one of them), but the more I looked at it the more convinced I became that this wasn't a good read. Throughout this process I came to see variation more as rate of change, and distance to ancestral as the better proxy for centrality. The differences squared is the plot I would use first to describe centrality. It is important to remember when reading this data that each alternate allele frequency is  most often less than 1. Squaring them makes them smaller, and squarerooting them makes them larger. These plots are sums of numerous fractions. This is why the squareroot y axis (figure 10) is greater than the squared y axis (figure 11). I find figure 12 to be the most salient and informing plot in the entire project. There are 2 general levels (0.5, 0.25). The significance of centrality is the y-intercept of autism rate (f(x) where "alt freq"=0). If API is most central than pca would downshift all rates by API rate before analysis, or use a dummy autism rate for ancestral that is very near API (I don't do this btw).
+
+
+
+#Iteration 2: Principal Component Analysis
+#### In this iteration I want to 1) aggregate autism rate and first 4 genes into combined dataframe. 2) Perform pca. 3) Draw Raw results (pca1, pca2, pca3, pca4) on top of oxtr gene plot (omit other 3 genes from display).
+###### Principal Components plotted onto the SNP of OXTR: figure 13, pcs of OXTR plotted alone: Figure 14
+
+```{r pca_first, echo=FALSE}
+
+
+###############################################
+# Comparing variance on genes to autism rate by group membership
+# Intended formula is autism rate~polymorphism 1+polymorphism 2+...+polymorphism 1943   (~ represents equals sign)
+# This formula looks like a 4 row x 1 column answer (y), set equal 4 rows of sum((weighted computed differentials times) 1943 columns) combined into a matrix that is 4 row x 1944 column. Each row is the alt allele freq of one of the 4 groups.
+# pca() should return a set of rows (each PCA, ordered by decending abs magnitude) x 1944 column of differentials.
+
+#### 1. Aggregate autism rate and first 4 genes into combined dataframe
+
+
+#aggregating the data into 4 rows x 1943 columns, autism first
+combined<-data.frame(white=unlist(c(y[1],oxtr$white,avpr1a$white,slc24a5$white,syvn1$white)), #will be row 1
+                     black=unlist(c(y[2],oxtr$black,avpr1a$black,slc24a5$black,syvn1$black)), #row 2
+                     hispanic=unlist(c(y[3],oxtr$hispanic,avpr1a$hispanic,slc24a5$hispanic,syvn1$hispanic)), #row 3
+                     api=unlist(c(y[4],oxtr$api,avpr1a$api,slc24a5$api,syvn1$api))) #row 4
+#reshaped
+combined<-data.frame(t(combined))
+
+#Column Names as SNP
+colnames(combined)<-c("autism",as.character(oxtrfile@fix[,"ID"]),avpr1afile@fix[,"ID"],slc24a5file@fix[,"ID"],syvn1file@fix[,"ID"])
+
+#safekeeping
+combinedbackup<-data.frame(combined)
+# end 1
+
+
+#### 2. Perform pca
+pc<-prcomp(combined) #gave me 4 pc
+
+#adding pcs as rows in dataframe for further visualization
+combined<-rbind(combined,pc$rotation[,1])
+combined<-rbind(combined,pc$rotation[,2])
+combined<-rbind(combined,pc$rotation[,3])
+combined<-rbind(combined,pc$rotation[,4])
+
+rownames(combined)<-c("white","black","hispanic","api","pc1","pc2","pc3","pc4")
+# end 2
+
+#### 3. Draw Raw results (pca1,pca2,pca3,pca4)
+#subscripting variables. Necessary to denote where each gene ends
+end_oxtr<-length(oxtr$white)
+end_avpr1a<-end_oxtr+length(avpr1a$white)
+end_slc24a5<-end_avpr1a+length(slc24a5$white)
+
+
+
+# Numbers: 2 is subscript to skip autism column, 1+end_oxtr is loci of final oxtr SNP)
+oxtr$pc1<-unlist(combined['pc1',][2:(1+end_oxtr)]) #oxtr$pc1 is the pc1 map of OXTR (array of decimals)
+oxtr$pc2<-unlist(combined['pc2',][2:(1+end_oxtr)])# pc2 of OXTR
+oxtr$pc3<-unlist(combined['pc3',][2:(1+end_oxtr)])
+oxtr$pc4<-unlist(combined['pc4',][2:(1+end_oxtr)])
+
+#These are plotting variables to size lines by each pc contribution to autism
+size1<-abs(combined['pc1',][1]$autism)
+size2<-abs(combined['pc2',][1]$autism)
+size3<-abs(combined['pc3',][1]$autism)
+size4<-abs(combined['pc4',][1]$autism)
+
+# Basic graph of genetic variation by group
+figure_13<-ggplot(data=oxtr, aes(x=seq(1,length(white))))+
+  stat_smooth(method='loess',geom='line',aes(y=white),color=whitecolor)+
+  stat_smooth(method='loess',geom='line',aes(y=black),color=blackcolor)+
+  stat_smooth(method='loess',geom='line',aes(y=hispanic),color=hispaniccolor)+
+  stat_smooth(method='loess',geom='line',aes(y=api),color=apicolor)+
+  
+#making 4 new lines, 1 for each principal component, pc line sized by global autism culpability of that component, could add effect relating to absolute value (+/-)
+  stat_smooth(method='loess',aes(y=oxtr$pc4*size4),color='pink1',size=unlist(size4))+
+  stat_smooth(method='loess',aes(y=oxtr$pc3*size3),color='pink2',size=unlist(size3))+
+  stat_smooth(method='loess',aes(y=oxtr$pc2*size2),color='pink4',size=unlist(size2))+
+  stat_smooth(method='loess',aes(y=oxtr$pc1*size1),color='red1',size=unlist(size1))+
+      scale_colour_manual("", 
+                      breaks = c("white", "black","hispanic","api"),
+                      values = c("white"=whitecolor, "black"=blackcolor,"hispanic"=hispaniccolor,"api"=apicolor)) +
+      labs(y='alternate allele frequency', x='position on chromosome',title='Figure 13. OXTR gene: Big Red Line is pc1, other pcs nearby in grey zone')
+
+figure_13
+
+#curious to see actual pca lines not loess, color darkness by pc rank, pc1 darkest green
+
+
+figure_14<-ggplot(data=subset(oxtr), aes(x=seq(1,length(white))))+
+  geom_line(aes(y=pc1*size1),color='green4',size=size1,na.rm=TRUE)+
+  geom_line(aes(y=pc2*size2),color='green3',size=size2,na.rm=TRUE)+
+  geom_line(aes(y=pc3*size3),color='green2',size=size3,na.rm=TRUE)+
+  geom_line(aes(y=pc4*size4),color='green1',size=size4,na.rm=TRUE)+
+  labs(y='pc value', x='position on chromosome',title='Figure 14. OXTR gene Principal Component Contribution to Autism')
+figure_14
+# Better plot would be to color by pcX[1], the autism rate pc (which is between -1 and +1), but this works
+
+```
+
+## Analysis Iteration 2
+
+I notice that my 2 first iterations' plots types are different because the second have data less than zero, unlike the frequency of alleles. Also there is a lot of both positive and negative activity in my last plot between 350 and 400. That might be an interesting region to explore in other ways, such as looking at the domains (http://www.uniprot.org/uniprot/P30559#subcellular_location). I don't feel comfortable with the quality of my pca in general. A better method to check them would be to find some data that categorizes individuals by phenotype (unlike 1000 Genomes). I saw a study that examined the transcriptome of autistic/depressed/schizophrenic/alcoholic/normals and computed correlations of SNPs to these conditions. Obtaining their data would be useful. To continue this avenue (I'm not) I think I would probably recontextualize the data before PCA, because of how the results of the next iteration (two-group and three-group PCA) turned out (variation was positively correlated to autism, except for black-hispanic and hispanic-api). To me this implies the variation would better be oppositely signed to the autism rate for different groups (eg. -10.2 instead of +10.2), or atleast recentered about api.
+
+#### For iteration 3 I want to show a selection of the pca I computed using specific groups instead of all 4 at same time. This shows a clear distinction.
+
+```{r cross_group_pca, echo=FALSE}
+#Naming convention
+#alternate frequencies: fullname of group, underscore between, plus df(dataframe), eg black_hispanicdf
+#pca of pairing: first letter of group, underscore between, plus _pc, eg b_h_pc
+
+
+#selecting rows I want
+black_hispanicdf<-combinedbackup[2:3,]
+hispanic_api_whitedf<-combinedbackup[(c(3,4,1)),]
+
+#doing pca
+b_h_pc<-prcomp(black_hispanicdf)
+h_a_w_pc<-prcomp(hispanic_api_whitedf)
+
+#coping pc to my df
+black_hispanicdf<-rbind(black_hispanicdf,b_h_pc$rotation[,1])
+black_hispanicdf<-rbind(black_hispanicdf,b_h_pc$rotation[,2])
+black_hispanicdf<-data.frame(t(black_hispanicdf))
+colnames(black_hispanicdf)<-c("black","hispanic","pc1","pc2")
+
+hispanic_api_whitedf<-rbind(hispanic_api_whitedf,h_a_w_pc$rotation[,1])
+hispanic_api_whitedf<-rbind(hispanic_api_whitedf,h_a_w_pc$rotation[,2])
+hispanic_api_whitedf<-rbind(hispanic_api_whitedf,h_a_w_pc$rotation[,3])
+hispanic_api_whitedf<-data.frame(t(hispanic_api_whitedf))
+colnames(hispanic_api_whitedf)<-c("hispanic","api","white" ,"pc1","pc2","pc3")
+
+
+
+# Basic graph of genetic variation by group
+black_hispanicdf<-black_hispanicdf[2:748,]
+figure_15<-ggplot(data=black_hispanicdf, aes(x=seq(1,length(black))))+
+
+  stat_smooth(method='loess',aes(y=black_hispanicdf$pc1),color='red',size=3)+
+  stat_smooth(method='loess',aes(y=black_hispanicdf$pc2),color='blue',size=2)+
+  geom_hline(yintercept=0)+
+      scale_colour_manual("", 
+                      breaks = c("black","hispanic"),
+                      values = c("black"=blackcolor,"hispanic"=hispaniccolor)) +
+  labs(y='pc', x='position on chromosome',title='Figure 15. OXTR gene: Black-Hispanic pca')
+
+figure_15
+
+
+hispanic_api_whitedf<-hispanic_api_whitedf[2:748,]
+figure_16<-ggplot(data=hispanic_api_whitedf, aes(x=seq(1,length(hispanic))))+
+
+#making 3 new lines, 1 for each principal component, pc line sized by global autism culpability of that component, could add effect relating to absolute value (+/-)
+  stat_smooth(method='loess',aes(y=hispanic_api_whitedf$pc1),color='red',size=3)+
+  stat_smooth(method='loess',aes(y=hispanic_api_whitedf$pc2),color='blue',size=2)+
+  stat_smooth(method='loess',aes(y=hispanic_api_whitedf$pc3),color='green',size=1)+
+  geom_hline(yintercept=0)+
+      scale_colour_manual("", 
+                      breaks = c("black","hispanic"),
+                      values = c("black"=blackcolor,"hispanic"=hispaniccolor)) +
+  labs(y='pc', x='position on chromosome',title='Figure 16. OXTR gene: Hispanic-api-white pca')
+
+figure_16
+
+#repeat for 2 other pairs
+hispanic_apidf<-combinedbackup[3:4,]
+api_whitedf<-combinedbackup[(c(4,1)),]
+
+h_a_pc<-prcomp(hispanic_apidf)
+a_w_pc<-prcomp(api_whitedf)
+
+
+hispanic_apidf<-rbind(hispanic_apidf,h_a_pc$rotation[,1])
+hispanic_apidf<-rbind(hispanic_apidf,h_a_pc$rotation[,2])
+hispanic_apidf<-data.frame(t(hispanic_apidf))
+colnames(hispanic_apidf)<-c("hispanic","api","pc1","pc2")
+
+api_whitedf<-rbind(api_whitedf,a_w_pc$rotation[,1])
+api_whitedf<-rbind(api_whitedf,a_w_pc$rotation[,2])
+api_whitedf<-data.frame(t(api_whitedf))
+colnames(api_whitedf)<-c("api","white" ,"pc1","pc2")
+
+
+
+# Basic graph of genetic variation by group
+hispanic_apidf<-hispanic_apidf[2:748,]
+figure_17<-ggplot(data=hispanic_apidf, aes(x=seq(1,length(hispanic))))+
+  stat_smooth(method='loess',aes(y=hispanic_apidf$pc1),color='red',size=3)+
+  stat_smooth(method='loess',aes(y=hispanic_apidf$pc2),color='blue',size=2)+
+  geom_hline(yintercept=0)+
+      scale_colour_manual("", 
+                      breaks = c("hispanic","api"),
+                      values = c("hispanic"=hispaniccolor,"api"=apicolor)) +
+  labs(y='pc', x='position on chromosome',title='Figure 17. OXTR gene: Hispanic-Api pca')
+
+figure_17
+
+# Basic graph of genetic variation by group
+api_whitedf<-api_whitedf[2:748,]
+figure_18<-ggplot(data=api_whitedf, aes(x=seq(1,length(api))))+
+  stat_smooth(method='loess',aes(y=api_whitedf$pc1),color='red',size=3)+
+  stat_smooth(method='loess',aes(y=api_whitedf$pc2),color='blue',size=2)+
+  geom_hline(yintercept=0)+
+      scale_colour_manual("", 
+                      breaks = c("api","white"),
+                      values = c("api"=apicolor,"white"=whitecolor)) +
+  labs(y='pc', x='position on chromosome',title='Figure 18. OXTR gene: api-white pca')
+
+figure_18
+
+
+
+
+
+
+
+```
+
+### Figures 19-21 show the sum magnitude of the principal components. This is intended as a rough proxy for volatility.
+
+```{r figure_19, echo=FALSE}
+#aggregate pcs
+black_hispanicdf.sumpc<-sum(black_hispanicdf$pc1)+sum(black_hispanicdf$pc2)
+hispanic_apidf.sumpc<-sum(hispanic_apidf$pc1)+sum(hispanic_apidf$pc2)
+api_whitedf.sumpc<-sum(api_whitedf$pc1)+sum(api_whitedf$pc2)
+hispanic_api_whitedf.sumpc<-sum(hispanic_api_whitedf$pc1)+sum(hispanic_api_whitedf$pc2)+sum(hispanic_api_whitedf$pc3)
+
+#bins
+figure_19_x<-factor(c("black-hispanic","hispanic-api","api-white","hispanic-api-white"))
+
+#levels
+figure_19_x<-factor(figure_19_x,levels(figure_19_x)[c(2,3,1,4)])
+
+#y values
+figure_19_y<-(c(black_hispanicdf.sumpc,hispanic_apidf.sumpc,api_whitedf.sumpc,hispanic_api_whitedf.sumpc))
+
+#plot
+figure_19<-ggplot(data=NULL,aes(x=figure_19_x,y=figure_19_y))+
+  geom_col(aes(fill=figure_19_x))+
+  geom_hline(yintercept=0)    +  scale_fill_manual("",breaks = figure_19_x,
+                    values = c("black-hispanic"='red',"hispanic-api"='blue',"api-white"='black',"hispanic-api-white"='purple')) +
+  labs(x="intergroup pca",y="variation effect on autism", title="Figure 19. Sum of PC per pair")
+figure_19
+```
+
+## Figure 19. All between -1 and +4, as compared with other 2 group comparisons, in the hundreds.
+
+```{r Last_3_group_pca_dichotomies, echo=FALSE}
+
+#repeat of last chunk with different pairs
+hispanic_whitedf<-combinedbackup[c(3,1),]
+black_apidf<-combinedbackup[(c(4,1)),]
+black_whitedf<-combinedbackup[(c(2,1)),]
+
+h_a_pc<-prcomp(hispanic_apidf)
+a_w_pc<-prcomp(api_whitedf)
+
+h_w_pc<-prcomp(hispanic_whitedf)
+b_a_pc<-prcomp(black_apidf)
+b_w_pc<-prcomp(black_whitedf)
+
+
+hispanic_whitedf<-rbind(hispanic_whitedf,h_a_pc$rotation[,1])
+hispanic_whitedf<-rbind(hispanic_whitedf,h_a_pc$rotation[,2])
+hispanic_whitedf<-data.frame(t(hispanic_whitedf))
+colnames(hispanic_whitedf)<-c("hispanic","white","pc1","pc2")
+
+black_apidf<-rbind(black_apidf,a_w_pc$rotation[,1])
+black_apidf<-rbind(black_apidf,a_w_pc$rotation[,2])
+black_apidf<-data.frame(t(black_apidf))
+colnames(black_apidf)<-c("black","api" ,"pc1","pc2")
+
+black_whitedf<-rbind(black_whitedf,a_w_pc$rotation[,1])
+black_whitedf<-rbind(black_whitedf,a_w_pc$rotation[,2])
+black_whitedf<-data.frame(t(black_whitedf))
+colnames(black_whitedf)<-c("black","white" ,"pc1","pc2")
+
+
+# Basic graph of genetic variation by group
+hispanic_whitedf<-hispanic_whitedf[2:748,]
+
+# #figure omitted
+# figure_51<-ggplot(data=hispanic_whitedf, aes(x=seq(1,length(hispanic))))+
+#   stat_smooth(method='loess',aes(y=hispanic_whitedf$pc1),color='red',size=3)+
+#   stat_smooth(method='loess',aes(y=hispanic_whitedf$pc2),color='blue',size=2)+
+#   geom_hline(yintercept=0)+
+#       scale_colour_manual("", 
+#                       breaks = c("hispanic","white"),
+#                       values = c("hispanic"=hispaniccolor,"white"=whitecolor)) +
+#   labs(y='alternate allele frequency', x='position on chromosome',title='OXTR gene: Hispanic-white pca')
+
+
+
+# Basic graph of genetic variation by group
+black_apidf<-black_apidf[2:748,]
+
+# #figure omitted
+# figure_52<-ggplot(data=black_apidf, aes(x=seq(1,length(black))))+
+#   stat_smooth(method='loess',aes(y=black_apidf$pc1),color='red',size=3)+
+#   stat_smooth(method='loess',aes(y=black_apidf$pc2),color='blue',size=2)+
+#   geom_hline(yintercept=0)+
+#       scale_colour_manual("", 
+#                       breaks = c("black","api"),
+#                       values = c("black"=blackcolor,"api"=apicolor)) +
+#   labs(y='alternate allele frequency', x='position on chromosome',title='OXTR gene: black-api pca')
+
+
+# #figure omitted
+# figure_52b<-ggplot(data=black_apidf, aes(x=seq(1,length(black))))+
+#   stat_summary(aes(y=black_apidf$pc1),fun.y=mean,geom='area',fill='red')+
+#   labs(y='alternate allele frequency', x='position on chromosome',title='OXTR gene: black-api pca, stat summary')
+
+
+
+
+# Basic graph of pair pca
+black_whitedf<-black_whitedf[2:748,]
+
+# #figure omitted
+# figure_53<-ggplot(data=black_whitedf, aes(x=seq(1,length(black))))+
+#   stat_smooth(method='loess',aes(y=black_whitedf$pc1),color='red',size=3)+
+#   stat_smooth(method='loess',aes(y=black_whitedf$pc2),color='blue',size=2)+
+#   geom_hline(yintercept=0)+
+#       scale_colour_manual("", 
+#                       breaks = c("black","white"),
+#                       values = c("black"=blackcolor,"white"=whitecolor)) +
+#   labs(y='alternate allele frequency', x='position on chromosome',title='OXTR gene: black-white pca')
+
+
+
+black_apidf.sumpc<-sum(black_apidf$pc1)+sum(black_apidf$pc2)
+
+hispanic_whitedf.sumpc<-sum(hispanic_whitedf$pc1)+sum(hispanic_whitedf$pc2)
+
+black_whitedf.sumpc<-sum(black_whitedf$pc1)+sum(black_whitedf$pc2)
+
+figure_20_x<-factor(c("black-api","hispanic-white","black-white"))
+
+
+figure_20_x<-factor(figure_20_x,levels(figure_20_x)[c(2,3,1)])
+
+figure_20_y<-(c(black_apidf.sumpc,hispanic_whitedf.sumpc,black_whitedf.sumpc))
+
+figure_20<-ggplot(data=NULL,aes(x=figure_20_x,y=figure_20_y))+
+  geom_col(aes(fill=figure_20_x))+
+  geom_hline(yintercept=0)    +  scale_fill_manual("",breaks = figure_20_x,
+                      values = c("black-api"='yellow',"hispanic-white"='green',"black-white"='orange')) +
+  labs(x="intergroup pca",y="variation effect on autism",title="Figure 20. Sum of PC per pair")
+
+figure_20
+
+
+
+
+
+###################### Select rows
+black_api_whitedf<-combinedbackup[(c(2,4,1)),]
+#pca
+b_a_w_pc<-prcomp(black_api_whitedf)
+#copy pca to df
+black_api_whitedf<-rbind(black_api_whitedf,b_a_w_pc$rotation[,1])
+black_api_whitedf<-rbind(black_api_whitedf,b_a_w_pc$rotation[,2])
+black_api_whitedf<-rbind(black_api_whitedf,b_a_w_pc$rotation[,3])
+
+#change shape, sum pc
+black_api_whitedf<-data.frame(t(black_api_whitedf))
+colnames(black_api_whitedf)<-c("black","api","white" ,"pc1","pc2","pc3")
+black_api_whitedf<-black_api_whitedf[2:748,]
+black_api_whitedf.sumpc<-sum(black_api_whitedf$pc1)+sum(black_api_whitedf$pc2)+sum(black_api_whitedf$pc3)
+
+
+
+#select rows, etc...
+black_hispanic_whitedf<-combinedbackup[(c(2,3,1)),]
+b_h_w_pc<-prcomp(black_hispanic_whitedf)
+black_hispanic_whitedf<-rbind(black_hispanic_whitedf,b_h_w_pc$rotation[,1])
+black_hispanic_whitedf<-rbind(black_hispanic_whitedf,b_h_w_pc$rotation[,2])
+black_hispanic_whitedf<-rbind(black_hispanic_whitedf,b_h_w_pc$rotation[,3])
+black_hispanic_whitedf<-data.frame(t(black_hispanic_whitedf))
+colnames(black_hispanic_whitedf)<-c("black","hispanic","white" ,"pc1","pc2","pc3")
+black_hispanic_whitedf<-black_hispanic_whitedf[2:748,]
+black_hispanic_whitedf.sumpc<-sum(black_hispanic_whitedf$pc1)+sum(black_hispanic_whitedf$pc2)+sum(black_hispanic_whitedf$pc3)
+
+
+#select rows, etc...
+black_hispanic_apidf<-combinedbackup[(c(2,3,4)),]
+b_h_a_pc<-prcomp(black_hispanic_apidf)
+black_hispanic_apidf<-rbind(black_hispanic_apidf,b_h_a_pc$rotation[,1])
+black_hispanic_apidf<-rbind(black_hispanic_apidf,b_h_a_pc$rotation[,2])
+black_hispanic_apidf<-rbind(black_hispanic_apidf,b_h_a_pc$rotation[,3])
+black_hispanic_apidf<-data.frame(t(black_hispanic_apidf))
+colnames(black_hispanic_apidf)<-c("black","hispanic","api" ,"pc1","pc2","pc3")
+black_hispanic_apidf<-black_hispanic_apidf[2:748,]
+black_hispanic_apidf.sumpc<-sum(black_hispanic_apidf$pc1)+sum(black_hispanic_apidf$pc2)+sum(black_hispanic_apidf$pc3)
+
+
+
+#bin creation
+figure_21_x<-factor(c("black-hispanic-api","black-hispanic-white","black-api-white","hispanic-api-white"))
+
+#levels
+figure_21_x<-factor(figure_21_x,levels(figure_21_x)[c(2,1,3,4)])
+
+#values for y axis
+figure_21_y<-(c(black_hispanic_apidf.sumpc,black_hispanic_whitedf.sumpc,black_api_whitedf.sumpc, hispanic_api_whitedf.sumpc))
+
+#plot
+figure_21<-ggplot(data=NULL,aes(x=figure_21_x,y=figure_21_y))+
+  geom_col(aes(fill=figure_21_x))+
+  geom_hline(yintercept=0)+ #I felt the x axis wasn't dark/bold enough
+  labs(x="intergroup pca",y="variation effect on autism", title="Figure 21. Sum of PC per triplet",fill='subset')
+figure_21
+```
+
+## Analysis Iteration 3
+
+Of the six intergroup summed pca pairs only black-hispanic and hispanic-api are negative. White-api is the only one of the remaining four less than +100. As stated earlier, I would negatively sign autism rate for black/hispanic pca going forward based on this. Multiracial children have been overrepresented in autism numbers (https://www.dds.ca.gov/Autism/docs/AutismReport2003.pdf, http://www.cdss.ca.gov/research/res/pdf/GENtrends/CA_USpop/CA_USpop2000.pdf). It would be interesting to see if that could be broken down by the aforementioned 6 cross-types, because the pca is so different depending on which 2 groups involved. Using 3 groups implies a fragility for groups including whites in multigroup PCA in particular (Figure 21).
+
+###For iteration 4 I want to compare which nucleotide alternate is by geom_point/geom_col, arranged by group.
+#### Figures 22-25 are geom_point per group. Figures 26-29 are geom_col per group. Same data in both plot types.
+```{r nucleotide_to, echo=FALSE}
+
+#alt is character I took from the vcf, its the alternate allele of each SNP. More than 1 character often means insertion/duplication I believe.
+
+figure_22<-ggplot(data=oxtr,aes(x=seq(1,length(oxtr$white))))+geom_point(data=oxtr, aes(y=white,color=alt))+labs(x="position on oxtr",title="Figure 22. White",y="frequency alternate")
+figure_23<-ggplot(data=oxtr,aes(x=seq(1,length(oxtr$white))))+geom_point(data=oxtr, aes(y=black,color=alt))+labs(x="position on oxtr",title="Figure 23. Black",y="frequency alternate")
+figure_24<-ggplot(data=oxtr,aes(x=seq(1,length(oxtr$white))))+geom_point(data=oxtr, aes(y=hispanic,color=alt))+labs(x="position on oxtr",title="Figure 24. Hispanic",y="frequency alternate")
+figure_25<-ggplot(data=oxtr,aes(x=seq(1,length(oxtr$white))))+geom_point(data=oxtr, aes(y=api,color=alt))+labs(x="position on oxtr",title="Figure 25. API",y="frequency alternate")
+
+
+ggarrange(figure_22,figure_23,figure_24,figure_25, nrow = 2,ncol=2)
+
+figure_25<-ggplot(data=oxtr,aes(x=seq(1,length(oxtr$white))))+geom_col(data=oxtr, aes(y=white,fill=alt))+labs(x="position on oxtr",title="Figure 26. White",y="frequency alternate")
+figure_26<-ggplot(data=oxtr,aes(x=seq(1,length(oxtr$white))))+geom_col(data=oxtr, aes(y=black,fill=alt))+labs(x="position on oxtr",title="Figure 27. Black",y="frequency alternate")
+figure_27<-ggplot(data=oxtr,aes(x=seq(1,length(oxtr$white))))+geom_col(data=oxtr, aes(y=hispanic,fill=alt))+labs(x="position on oxtr",title="Figure 28. Hispanic",y="frequency alternate")
+figure_29<-ggplot(data=oxtr,aes(x=seq(1,length(oxtr$white))))+geom_col(data=oxtr, aes(y=api,fill=alt))+labs(x="position on oxtr",title="Figure 29. API",y="frequency alternate")
+
+
+ggarrange(figure_25,figure_26,figure_27,figure_29, nrow = 2,ncol=2)
+```
+
+## Analysis Iteration 4
+
+One thing I really like about these plots is that they show that each group has some alternate SNP that occur >50%. I think this is quite interesting for a variety of reasons. When ancestral, which is kind of a default, is less frequent than the alternate, it loses its validity to be taken as the baseline. What can >50% tell us about rate of change?
+
+API have a SNP at position '100' that is at probability 1, in a clear field. I think this is the only instance of alternate frequency of 1 for OXTR. Maybe that is/was strongly selected for. API is cleared out the most (least in flux) with the least change from ancestral. This might not be an accurate assessment though, because a high rate of change near zero in many SNP could be more activity than long range change in fewer SNP. That SNP is out outlier, and could be looked at further.
+
+Another thing I really like about this plot is that color coded alternates spikes to different nucleotides often look completely different. This information is absent in my simple loess/line, because color is coding group in those plots (Figures 2-6). Because of the field density this makes spikes that are totally different look very similar. I can't tease apart line spikes in 423,425,427 from 424,426,428. But this could happen in loess and look basically identical. Color coding by nucleotide brings these differences out.
+
+## For my last iteration, 5, I want to focus on a separate data set: a prop to interpret the previous iteration.
+######This data set is a personal creation using a "dictionary" (quotes because not unique keys) for codons. This dictionary has 21 unique keys, but 64 values (some keys used repeatedly). So there are changes to the 64 values that result in a different value, but not a different key. When this happens it's called a silent mutation. I will construct a topology of silent mutations (only single point). Codons are 3 nucleotides long, and as it turns out, the degrees of freedom and the directionality towards nonsense risk of the same nucleotides are very different depending on the codon loci. Through this process I came to see risk in a new light. I originally mapped cysteine as ground zero for risk because it is surrounded by the stop codons (in 2d map), and methionine as safe zone, and acidic as their own 3rd pole. I feel this is a great start as both M and C use sulphur, and they create a vector of start/stop. What I came to realize is that being near "full stop" or catastrophic mutations is a preferred location, presumably because problems are so quickly eliminated from populations. It has high risk to kill the individual, but low risk to kill the species. They are easy to remove because the results phenotype is dramatic. The amino acids I would consider of very high value include cysteine, tryptophan, tyrosine, histadine, which are all close to "stop". Under this anthropomorphizing light, silent mutations are necessary evils that the system would rather not have. Selecting the topology is a question of asking which AA can cause the least damage when I (teleological evolution) can't see it's shifting. Silent mutations seem to maintain functionality, and won't necessarily be excised, but that is not the full story. They are a degree of freedom that has weaker selection pressures on them. They intereact with dna polymerases and other molecules, but their codon identity is lost on transcribed proteins.
+
+### Figure 30. attempts to rank codons by proximity to missense/becoming cysteine ("risk").
+### Figure 31. is a network of all 64 codons. Each have 9 edges (3 loci per codon, 3 alternate nucelotides to change to). Edges alpha level is how much "risk" difference between 2 codons, small changes look invisible. Edges' color is color gradient of average of 2 codons "risk", green low and red high.
+### Figure 32. is different node layout but same network as Figure 31. This has greater association, but is more chaotic to look at.
+### Figure 33-36. are maps of just silent mutations and how they affect my "risk".
+```{r codon, echo=FALSE, message=FALSE, results='hide'}
+
+
+score<-function(arg1){ #scores codon by philosophy M as 0 and C as max risk (30)
+  
+  #forumla is simple at codon loci 1 and 2, but splits nculeotides at loci 3. Formula is the contents of codon_map declared at below
+  numb<-6+abs((codon_map[substr(arg1,1,1),4]-1)*3)+codon_map[substr(arg1,1,1),1]+(codon_map[substr(arg1,1,1),4]*(codon_map[substr(arg1,2,2),2]+codon_map[substr(arg1,3,3),3]))
+ # if(arg1=="UGG"){
+  #  numb=
+  #}
+return (numb)
+}
+
+#Populate these variables with zero for troubleshooting purposes
+A_harm<-0
+T_harm<-0
+G_harm<-0
+C_harm<-0
+
+#matr is my matrix for adding edge qualities such as "risk" and "edge_type"
+matr<-matrix(rep(0.01,4096),nrow = 64,ncol = 64) #populate with 0.01 for troubleshooting
+
+MYMAP<-data.frame(1,2,3,4) #simple hash to 
+colnames(MYMAP)<-c("A","T","G","C") #hash from
+
+ham_edges<-function(g, df,matr){ #This function populates the network 'g' with edges between nodes where:
+  # 1. codon identity is 2/3rds same (sinlge point mutation)
+
+  mar<-matrix(nrow = 64,ncol = 64)
+  set.edge.value(g,"risk",mar) #creating col name
+
+  set.edge.value(g,"edge_type",mar) #creating col name
+  for (i in seq(1,64)){ #codon 1 to compare
+    for (j in seq(1,64)){ #against codon 2
+      #logic of if: check 3 true/false conditions sum if greater than 1. This determines if atleast 2 codon loci match
+      if(1<sum((substr(df$codon[i], 1,1)==(substr(df$codon[j], 1,1))), (substr(df$codon[i], 2,2)==(substr(df$codon[j], 2,2))), (substr(df$codon[i], 3,3)==(substr(df$codon[j], 3,3))))) {
+
+        
+        #add edge with a "risk" value of risk difference between the nodes
+        rankdiff<-df$risk[i]-df$risk[j]
+        add.edge(g,i,j, names.eval="risk",vals.eval=rankdiff)
+        matr[i,j]<-df$risk[i]+df$risk[j] #this stores the second edge value I want to create (addition instead of subtraction of risk)
+        }   # if 2 nucleotides same
+        } #for j
+      } #for i
+      g<-set.edge.value(g,"edge_type",matr) #populating edge_type values
+      
+  return(g)
+}
+
+
+
+
+# 1, scale of 4, step 1. A-U. A 0, C 1 G 2 U 3
+# 2, scale of 4, step 1. U-G. U 0   C 1   A  2  G 3 (alternate for C: GACU 0123)
+# 3, scale of 4, step 1. G-C,  G 0  A 1    C 2  U 3  (UGU is more protected by stop codons than UGC) (alternate for C: UCAG)
+#                   A C G T |U C A G|G A C U
+codon_map<-matrix(c(0,0,0,12,0,0,4,8,2,4,3,3,       1,-1,1,1),nrow=4,ncol=4)
+
+rownames(codon_map)<-c("A","C","G","T")
+
+#pull data from codon dictionary (premade in "GENETIC_CODE") I prefer to use variable 'a'
+a<-data.frame(list(GENETIC_CODE))
+a$row<-rownames(a)
+
+df <- data.frame('AA','versions', 'risk', c(seq(1,64)))
+colnames(df)<-c('AA','versions', 'risk', 'number')
+df$versions<-as.integer(df$versions)
+df$risk<-as.double(df$risk)
+
+df$AA<-factor(a$structure.c..F....F....L....L....S....S....S....S....Y....Y...)
+
+df$codon<-factor(a$row)
+
+
+for (i in df$number){ #counting number of codons per AA
+  
+  df$AA[i]<-a$structure.c..F....F....L....L....S....S....S....S....Y....Y...[i]
+  df$versions[i]=sum(df$AA==df$AA[i]) #sum is that count
+  df$risk[i]=score(a$row[i])
+
+}
+
+#plotting variables
+df$plot_height[df$AA=="M"]<-10
+df$plot_height[df$AA=="T"]<-11
+df$plot_height[df$AA=="I"]<-8
+df$plot_height[df$AA=="N"]<-12
+df$plot_height[df$AA=="K"]<-13
+df$plot_height[df$AA=="S"]<-14
+df$plot_height[df$AA=="R"]<-15
+df$plot_height[df$AA=="V"]<-16
+df$plot_height[df$AA=="A"]<-17
+df$plot_height[df$AA=="D"]<-18
+df$plot_height[df$AA=="E"]<-17
+df$plot_height[df$AA=="G"]<-16
+df$plot_height[df$AA=="F"]<-15
+df$plot_height[df$AA=="L"]<-14
+df$plot_height[df$AA=="S"]<-13
+df$plot_height[df$AA=="Y"]<-12
+df$plot_height[df$AA=="*"]<-11
+df$plot_height[df$AA=="C"]<-10
+df$plot_height[df$AA=="W"]<-8
+df$plot_height[df$AA=="L"]<-6
+df$plot_height[df$AA=="P"]<-5
+df$plot_height[df$AA=="H"]<-3
+df$plot_height[df$AA=="Q"]<-5
+df$plot_height[df$AA=="R"]<-6
+
+#plot
+figure_30<-ggplot(data=df,aes(x=risk,y=plot_height,color=AA))+geom_point()+labs(y="AA", x="risk of becoming cysteine (C)",title="Figure 30. (\'*\' denotes \'stop\')")
+
+figure_30
+
+#empty network of 64
+g<-network.initialize(64)
+
+#add edges
+g<-ham_edges(g,df,matr)
+
+
+g$AA<-df$AA
+g$codon<-df$codon
+g$risk<-df$risk
+
+network.vertex.names(g)<-as.character(df$AA)
+
+for (i in seq(1,64)){
+g$color[i]<-if(g$AA[i]=='M'){"yellow1"} else{ if(g$AA[i] %in% c('V','A','M','I','P','L','W','F','L')){"yellow3"}
+  else {if (g$AA[i] %in% c('Q','T','N','S','G','S','Y')){"green"}
+    else {if (g$AA[i] %in% c('H','R','K')){"blue"}
+      else {if (g$AA[i] %in% c('D','E')){"red"}
+        else {if (g$AA[i] %in% c('C')){"darkgreen"}
+          else {if (g$AA[i] %in% c('*')){"black"}
+          }
+        }
+      }
+    }
+  }
+  }  
+           }
+
+
+
+
+
+
+figure_31<-ggnet2(g,mode='circle', node.label = g$AA  ,color=g$color,edge.color = rgb(get.edge.value(g,"edge_type")/60,1-(get.edge.value(g,"edge_type")/60),0)   
+       
+       
+       
+       ,edge.alpha=abs(-0.5+abs(get.edge.value(g,'risk'))/30),color.legend = g$AA)+guides(size=FALSE) +labs(title="Figure 31")
+       
+
+figure_32<-ggnet2(g,mode='kamadakawai', node.label = g$AA  ,color=g$color,edge.color = rgb(get.edge.value(g,"edge_type")/60,1-(get.edge.value(g,"edge_type")/60),0)  
+       
+       
+       
+       ,edge.alpha=abs(-0.5+abs(get.edge.value(g,'risk'))/30),color.legend = g$AA)+guides(size=FALSE)+labs(title="Figure 32")  
+
+ggarrange(figure_31,figure_32,nrow = 1)
+
+#copy network to new variable to use in next plot
+n<-network(g)
+
+
+
+#function that looks at subset of single point mutations: silent mutations
+silent_properties<-function(n ){
+
+  silentdf<-data.frame( rep(as.numeric(0),48),rep(as.character("N"),48),rep(as.character("N"),48),rep(as.numeric(0),48),rep(as.numeric(0),48),rep(as.numeric(0),48)) #48 because there are 3 codon loci and 4 nucleotides from, and 4 nucleotides to (3*4*4=48)
+  colnames(silentdf)=c("count","nucleotide_from","nucleotide_to","cumulative_risk","ii","jj")
+
+levels(silentdf$nucleotide_from)<-c("N","A","T","G","C")
+levels(silentdf$nucleotide_to)<-c("N","A","T","G","C")
+ 
+  for (i in seq(1,64)){ #comparing codons again
+    for (j in seq(1,64)){
+      
+      #logic of if: 2 or more loci same
+      if(1<sum((substr(n$codon[i], 1,1)==(substr(n$codon[j], 1,1))), (substr(n$codon[i], 2,2)==(substr(n$codon[j], 2,2))), (substr(n$codon[i], 3,3)==(substr(n$codon[j], 3,3))))) {
+        rankdiff<-n$risk[i]-n$risk[j]
+         
+   
+        
+        #  test mutation is silent (AA=AA) but codon isn't same - !(i==j) excludes comparisons of 'AAA' to 'AAA'
+        if ( (n$AA[i]==n$AA[j]) & !(i==j)){
+      
+       
+          for (k in seq(1,3)){ #search each loci
+           
+              
+            temfigure_1<-substr(n$codon[i],k,k) #pull each nucleotide
+            temfigure_2<-substr(n$codon[j],k,k)
+          
+         if(!(temfigure_1 %in% temfigure_2)){ #if !same, then we know mutated loci is current k
+            
+            subscript<-as.numeric((16*(k-1))+((4*MYMAP[temfigure_1])-4)+(MYMAP[temfigure_2]))
+         
+            #populates y axes, binned by x axes (48 columns of silentdf) of next 4 plots
+            silentdf$count[subscript]<-silentdf$count[subscript]+1
+            silentdf$nucleotide_from[subscript]<-temfigure_1
+            silentdf$nucleotide_to[subscript]<-temfigure_2
+            silentdf$cumulative_risk[subscript]<-rankdiff+silentdf$cumulative_risk[subscript]
+            silentdf$ii[subscript]=i #from nucleotide
+            silentdf$jj[subscript]=j #to nucleotide
+         
+          } # end test to find diff nucleotide (yes = this letter is the one lacking)
+          }# end for loop of each letter in i codon
+          }# end if  rankdiff
+        
+         }   # if 2 nucleotides same
+        } #for j
+    
+      } #for i
+      
+  return(silentdf)
+}
+
+
+plotdf<-data.frame(silent_properties(n))
+
+
+
+#Titled by codon loci!!!
+figure_33<-ggplot(plotdf[1:16,], aes(x=nucleotide_to))+geom_point(aes(y=nucleotide_from,size=count, color=-cumulative_risk/count))+ scale_colour_gradient(low = "green", high="red")+labs(title="Figure 33: codon loci 1 silent mutations")
+
+
+
+figure_34<-ggplot(plotdf[17:32,], aes(x=nucleotide_to))+geom_point(aes(y=nucleotide_from,size=count, color=-cumulative_risk/count))+ scale_colour_gradient(low = "green", high="red")+labs(title="Figure 34:codon loci 2 silent mutations")
+
+figure_35<-ggplot(plotdf[33:48,], aes(x=nucleotide_to))+geom_point(aes(y=nucleotide_from,size=count, color=-cumulative_risk/count))+ scale_colour_gradient(low = "green", high="red")+labs(title="Figure 35:codon loci 3 silent mutations")
+
+figure_36<-ggplot(plotdf, aes(x=nucleotide_to))+geom_point(aes(y=nucleotide_from,size=count, color=-cumulative_risk/count))+ scale_colour_gradient(low = "green", high="red")+labs(title="Figure 36:codon loci combined silent mutations")
+
+#ggarrange(figure_33,figure_34,figure_35,figure_36,nrow = 3,ncol=2) #They are too compact to display in ggarrange
+figure_33
+figure_34
+figure_35
+figure_36
+
+```
+
+## Analysis iteration 5
+
+The thing that stood out to me the most was that the only silent mutation at codon loci 2 (Figure 34) was stop-to-stop which is probably significant. The 2 large circles in Figures 35/36 are G-A (pyramidines) and T-C (purines). I wonder if a point mutation at only loci 2 is less likely than other single point mutations.
+
+## Summary
+####1. Autism per Variation, Figure 12
+####2. Cross-group pca magnitudes/directionality, Figures 19, 20, 21
+####3. Topology of silent mutations of codon loci 2, Figure 34
+
+```{r summary, echo=FALSE}
+figure_12
+
+
+###This next section of code is reformating text of figures 19-21 so they fit into a single plot without text cramping
+############################################
+figure_19b_x<-factor(c("b-h","h-a","a-w","h-a-w"))
+figure_19b_x<-factor(figure_19b_x,levels(figure_19b_x)[c(2,3,1,4)])
+figure_19b_y<-(c(black_hispanicdf.sumpc,hispanic_apidf.sumpc,api_whitedf.sumpc,hispanic_api_whitedf.sumpc))
+figure_19b<-ggplot(data=NULL,aes(x=figure_19b_x,y=figure_19b_y))+
+  geom_col(aes(fill=figure_19b_x))+
+  geom_hline(yintercept=0)    +  scale_fill_manual("",breaks = figure_19b_x,
+                    values = c("b-h"='red',"h-a"='blue',"a-w"='black',"h-a-w"='purple')) +
+  labs(x="intergroup pca",y="variation effect on autism", title="Figure 19. Sum of PC per pair")
+
+figure_20b_x<-factor(c("b-a","h-w","b-w"))
+figure_20b_x<-factor(figure_20b_x,levels(figure_20b_x)[c(2,3,1)])
+figure_20b_y<-(c(black_apidf.sumpc,hispanic_whitedf.sumpc,black_whitedf.sumpc))
+figure_20b<-ggplot(data=NULL,aes(x=figure_20b_x,y=figure_20b_y))+
+  geom_col(aes(fill=figure_20b_x))+
+  geom_hline(yintercept=0)    +  scale_fill_manual("",breaks = figure_20b_x,
+                      values = c("b-a"='yellow',"h-w"='green',"b-w"='orange')) +
+  labs(x="intergroup pca",y="variation effect on autism",title="Figure 20. Sum of PC per pair")
+
+figure_21b_x<-factor(c("b-h-a","b-h-w","b-a-w","h-a-w"))
+figure_21b_x<-factor(figure_21b_x,levels(figure_21b_x)[c(2,1,3,4)])
+figure_21b_y<-(c(black_hispanic_apidf.sumpc,black_hispanic_whitedf.sumpc,black_api_whitedf.sumpc, hispanic_api_whitedf.sumpc))
+figure_21b<-ggplot(data=NULL,aes(x=figure_21b_x,y=figure_21b_y))+
+  geom_col(aes(fill=figure_21b_x))+
+  geom_hline(yintercept=0)+
+  labs(x="intergroup pca",y="variation effect on autism", title="Figure 21. Sum of PC per triplet",fill='subset')
+########################################### End of reformatting figures 19-21
+
+
+
+
+
+ggarrange(figure_19b,figure_20b,figure_21b, nrow = 2,ncol = 2)
+figure_34
+```
+
+
+#Reflection
+
+### I ran into difficulties in my project when trying to determine the correct method to regress the data. The form of the data desired is factor independent variables (SNPs) to a categoric dependent variable (binary: is autistic?). I didn't have the form of the data I desired. The dependent variables were not associated with the independent variable in the 1000 Genomes source, I matched them after the fact combinging genetic data and sociological data (epistemologically different sources). Instead of using factor independent variables (ATGC), I used linear independent variables (probability of alternate). I thought the appropriate statistical method might be linear discriminant analysis, but in the end used principal component analysis for what I had to work with. I also ran into difficulties using the library packages for vcf. This format does not seem to be well supported, but it is the default format 1000 Genomes uses in their browser interface. I tried different methods to get the same data in a different format but was unsuccessful. The underlying problem is that vcf files require a lot of memory and reading them (size >300kb) into R Studio causes R Studio crashes on my computer (known problem in community). The five genes I used were all less than 500 kb. My last obstacle I couldn't overcome was installing bcftools: unable to compile c source code. Neither of these difficulties impacts what I did do, only what I wanted and attempted to.
+
+### I had success learning how to download and use vcf (of small size), performing pca in R, and learning how to draw networks. These accomplishments were very satisfying and empowering. I did not see any step in the actual EDA as a success because I do not have confidence in the data nor method beyond a superficial summary. This excludes pca results for validity concerns, but was still included in summary because that was my method. Alternate allele frequency (even including REF and ALT) has limited signal simply because of linkage disequilibrium. 1000 Genomes does have the raw data for each sample instead of just population frequencies, but those files are even larger. The methodology I used would be more appropriate if a previous study had shown r=1 for these genes and autism. This isn't the case, and that study doesn't exist. I do think I've succeeded in this project by thinking through questions of validity/applicability of datasets and methods. Even if my conclusions have been wrong, I am more familiar with the subject now, and know some things that <i>don't</i> work.
+
+###The next step in taking this project further would be contextualizing the SNP with actual residue changes. Given that there are hundreds of SNPs per gene that may open a can of worms with multiple SNP per residue and linkage disequilibrium within that codon. The structure of the codon dictionary reminds me of programming where errors intentionally prevent compiling if they are "bad enough", and hopefully fail in a way that can transmit a signal for how to fix. Keeping a deleterious/shaky module around, that emits a distinct signal for a trial, has utility. This has existential relevence to Hero's Journey (as flawed emobodiment of ideal) and dramatic transformation to personal change/triumph, and the flawed nature of the human condition. Why keep imperfection in the pursuit of progress? I would say contrast. The codon dictionary <i>could</i> have coded all but 20 as stop. And here we are.
+
+### Additionally, I feel that distance from ancestral and rate of variation are informative but my perspective on how to contextualize that changed during the project, meaning my perspective isn't developed. Maybe good EDA means being open to perspective changing, but it feels blind without social proofing.
+
+</body>
+</html>
+```
+
+
+```
