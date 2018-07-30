@@ -9,13 +9,14 @@ whitecolor='pink1'
 blackcolor='black'
 hispaniccolor='tan3'
 apicolor='yellow1'
+mytol<-var(c(0,0,0,0.001))
 
-#autism rate by group: white,black,hispanic,api (asian-pacific islander). It should be noted that all samples are east asian, none pacific islander.
+#autism rate by group: white,black,hispanic,api (asian-pacific islander). It should be noted that all api samples are east asian, none pacific islander.
 y<-c(12,10.2,7.9, 9.7) #retrieved from https://www.cdc.gov/mmwr/preview/mmwrhtml/ss6103a1.htm#Tab2
 
 
 
-setwd('data/udacity/projects/1')
+setwd('~/data/udacity/projects/1')
 
 # Gene files obtained at https://www.ncbi.nlm.nih.gov/variation/tools/1000genomes/
 # Method: search by gene name, click downloads, click download data for this region (change data to aggregates by population)
@@ -30,15 +31,20 @@ setwd('data/udacity/projects/1')
 #                 https://www.ncbi.nlm.nih.gov/pmc/articles/PMC5667738/
 #                 https://www.proteinatlas.org/ENSG00000188467-SLC24A5/tissue (slc expresses in male tissues, oxtr/avp extresses in female tissues)
 #                 https://www.researchgate.net/publication/273148753_Oxytocin_Vasopressin_and_Williams_syndrome_Epigenetic_effects_on_Abnormal_Social_Behavior
-#                 
+#    
+#                 http://www.wired.co.uk/video/how-music-can-help-with-strokes-autism-and-parkinsons-disease (music)
+#                 https://pdfs.semanticscholar.org/58b6/0a01dd60cf45577fa39d23baa823f260608b.pdf (autism/music)
+#                 https://en.wikipedia.org/wiki/Williams_syndrome (music: multiple references, they are talented)
+
+
 oxtrfile<-read.vcfR('oxtr.popvcf') # oxytocin is a pro social hormone at behavioral level
 avpr1afile<-read.vcfR('avpr1a.popvcf') # AVP intricately involved with social behavior, involved in osmotic pressure avoidance
                                        # in c elegans, as per Temple Grandin, autistics may prefer a hug machine (relates to sensory pressure)
-slc24a5file<-read.vcfR('slc24a5.popvcf') #solute transporter (na,k,ca). At cellular level oxy/avp mediate solute metabolism
-syvn1file<-read.vcfR('syvn1.popvcf')     #ER misfolded protein gene. Protein blockage/vesicle inteference associated with dementia
+slc24a5file<-read.vcfR('slc24a5.popvcf') #solute transporter (na,k,ca). At cellular level oxy/avp mediate solute concentration
+syvn1file<-read.vcfR('syvn1.popvcf')     #ER misfolded protein gene. Protein blockage/vesicle inteference associated with dementia (and autism)
 
 # Other genes of interest - cacna1c and vdr (cellular calcium), htr3a and slc6a4 (serotonin), CAMK2A, SNAP25 (intracellular calcium)
-#                          caps2, INSR (BDNF release)
+#                          caps2, INSR (BDNF release, relates to development of -among others- GABAergic networks, correlates to waist size)
 # Note: plots do not necessarily represent n-terminus to c-terminus along x-axis. oxtr and avpr1a transcripts are read from
 # right to left by position on chromosome.
 
@@ -68,7 +74,7 @@ oxtr$JPT<-gsub(',','.',oxtrfile@gt[,'JPT'])
 numer<-as.numeric(unlist(strsplit(oxtr$GBR,':'))[seq(2,4*length(oxtr$GBR),4)])+
             as.numeric(unlist(strsplit(oxtr$FIN,':'))[seq(2,4*length(oxtr$FIN),4)])+
             as.numeric(unlist(strsplit(oxtr$CEU,':'))[seq(2,4*length(oxtr$CEU),4)])
-# denom is quantity of pop aggregate samples per gene, replicated to be vector of equal length as numer
+# denom is quantity of polymorphism sites (all SNP) per gene, replicated to be vector of equal length as numer
 denom<-(rep((as.numeric(unlist(strsplit(oxtr$GBR,':'))[1])+as.numeric(unlist(strsplit(oxtr$FIN,':'))[1])+
                as.numeric(unlist(strsplit(oxtr$CEU,':'))[1])),length(oxtr$GBR)))
 
@@ -346,7 +352,15 @@ p3<-p3+  theme(panel.background = element_rect(fill='lightskyblue',color='lights
   
 p4<-p4+  theme(panel.background = element_rect(fill='lightskyblue',color='lightskyblue'),panel.grid.major=element_line(color='lightskyblue'),panel.grid.minor=element_line(color='lightskyblue'))
 
-ggarrange(p1,p3,p2,p4,ncol=2,nrow=2)
+ggarrange(p1,p3,p2,p4,ncol=2,nrow=2) #changed arrangement to put avp under oxy, since I think they compare better
+
+
+#common autism SNP:rs53576, homozygous A is worst, homozygous G is best
+# reference for this loci is A (autistic) per console command: oxtrfile@fix[,4][which(oxtrfile@fix[,3]=='rs53576')[1]]
+#increased variance at this loci is negatively correlated to autism
+p5<-p1 + geom_vline(show.legend=TRUE,xintercept=which(oxtrfile@fix[,3]=='rs53576')[1],color="darkolivegreen",linetype=2)
+p5
+
 
 
 ###############################################
@@ -367,20 +381,83 @@ combined<-data.frame(white=unlist(c(oxtr$white,avpr1a$white,slc24a5$white,syvn1$
                      hispanic=unlist(c(oxtr$hispanic,avpr1a$hispanic,slc24a5$hispanic,syvn1$hispanic)), #row 3
                      api=unlist(c(oxtr$api,avpr1a$api,slc24a5$api,syvn1$api))) #row 4
 
-combined<-data.frame(row=c("white","black","hispanic","api"))
-combined<-NULL
-combined<-rbind(combined,white=unlist(c(oxtr$white,avpr1a$white,slc24a5$white,syvn1$white)))
-combined<-rbind(combined,black=unlist(c(oxtr$black,avpr1a$black,slc24a5$black,syvn1$black)))
-combined<-rbind(combined,hispanic=unlist(c(oxtr$hispanic,avpr1a$hispanic,slc24a5$hispanic,syvn1$hispanic)))
-combined<-rbind(combined,api=unlist(c(oxtr$api,avpr1a$api,slc24a5$api,syvn1$api)))
+mymatrix<-matrix(c(white=unlist(c(oxtr$white,avpr1a$white,slc24a5$white,syvn1$white)), #row 1
+                   black=unlist(c(oxtr$black,avpr1a$black,slc24a5$black,syvn1$black)), #row 2
+                   hispanic=unlist(c(oxtr$hispanic,avpr1a$hispanic,slc24a5$hispanic,syvn1$hispanic)), #row 3
+                   api=unlist(c(oxtr$api,avpr1a$api,slc24a5$api,syvn1$api))),nrow=4,ncol=1943)
 
-combined<-combined[,1:4]
-#stuff that doesn't work
-ans<-lm(y~combined)
+combined<-data.frame(mymatrix,row.names = c("white","black","hipanic","api"))
+
+#preparing loci as column names in format of chr.position, eg chr3 position 87654321 = 3.87654321
+oxtr$factors<-as.character(as.numeric(oxtrfile@fix[,1])+(as.numeric(oxtrfile@fix[,2])/1e7))
+avpr1a$factors<-as.character(as.numeric(avpr1afile@fix[,1])+(as.numeric(avpr1afile@fix[,2])/1e8))
+slc24a5$factors<-as.character(as.numeric(slc24a5file@fix[,1])+(as.numeric(slc24a5file@fix[,2])/1e8))
+syvn1$factors<-as.character(as.numeric(syvn1file@fix[,1])+(as.numeric(syvn1file@fix[,2])/1e8))
+
+mylist=list()
+tempfactor=character()
+#adding trailing zeroes
+for (each in oxtr$factors){
+  tempfactor<-each
+  while (nchar(tempfactor)<9){
+  tempfactor<-paste(tempfactor,"0",sep="")}
+  mylist<-c(mylist,tempfactor)
+}
+oxtr$factors<-unlist(mylist)
+mylist<-NULL
+
+for (each in avpr1a$factors){
+  tempfactor<-each
+  while (nchar(tempfactor)<10){
+    tempfactor<-paste(tempfactor,"0",sep="")}
+  mylist<-c(mylist,tempfactor)
+}
+avpr1a$factors<-unlist(mylist)
+mylist<-NULL
+
+for (each in slc24a5$factors){
+  tempfactor<-each
+  while (nchar(tempfactor)<10){
+    tempfactor<-paste(tempfactor,"0",sep="")}
+  mylist<-c(mylist,tempfactor)
+}
+slc24a5$factors<-unlist(mylist)
+mylist<-NULL
+
+for (each in syvn1$factors){
+  tempfactor<-each
+  while (nchar(tempfactor)<10){
+    tempfactor<-paste(tempfactor,"0",sep="")}
+  mylist<-c(mylist,tempfactor)
+}
+syvn1$factors<-unlist(mylist)
 
 
-#combined<-t(combined) 
-ans<-lda(combined[1,]+combined[2,]+combined[3,]+combined[4,],grouping=rows)
 
-                    
+colnames(combined)<-c(as.character(oxtr$factors),avpr1a$factors,slc24a5$factors,syvn1$factors)
+combined<-combined[,!apply(combined, MARGIN = 2, function(x) max(x, na.rm = TRUE) == min(x, na.rm = TRUE))] #reference https://stackoverflow.com/questions/15068981/removal-of-constant-columns-in-r
+#DATA prepared###############################################################################
+
+combined<-combined/.001
+
+ans<-lda(y~rownames(combined), data=combined)#,tol=mytol)
+
+
+
+# combined<-data.frame(row=c("white","black","hispanic","api"))
+# combined<-NULL
+# combined<-rbind(combined,white=unlist(c(oxtr$white,avpr1a$white,slc24a5$white,syvn1$white)))
+# combined<-rbind(combined,black=unlist(c(oxtr$black,avpr1a$black,slc24a5$black,syvn1$black)))
+# combined<-rbind(combined,hispanic=unlist(c(oxtr$hispanic,avpr1a$hispanic,slc24a5$hispanic,syvn1$hispanic)))
+# combined<-rbind(combined,api=unlist(c(oxtr$api,avpr1a$api,slc24a5$api,syvn1$api)))
+# 
+# combined<-combined[,1:4]
+# #stuff that doesn't work
+# ans<-lm(y~combined)
+# 
+# 
+# #combined<-t(combined) 
+# ans<-lda(combined[1,]+combined[2,]+combined[3,]+combined[4,],grouping=rows)
+# 
+#                     
                      
